@@ -35,6 +35,15 @@ class BMI160FFTComponent : public PollingComponent {
   void set_dominant_frequency_energy_sensor(sensor::Sensor *s) { dominant_frequency_energy_sensor_ = s; }
   void set_rpm_sensor(sensor::Sensor *s) { rpm_sensor_ = s; }
 
+  // Peak sensor setters (for N peaks feature)
+  void set_peak_frequency_sensor(size_t index, sensor::Sensor *s) {
+    if (index < MAX_PEAKS) peak_frequency_sensors_[index] = s;
+  }
+  void set_peak_magnitude_sensor(size_t index, sensor::Sensor *s) {
+    if (index < MAX_PEAKS) peak_magnitude_sensors_[index] = s;
+  }
+  void set_num_peaks(size_t count) { num_peaks_ = count; }
+
   // Binary sensor setters
   void set_running_binary_sensor(binary_sensor::BinarySensor *s) { running_binary_sensor_ = s; }
 
@@ -69,6 +78,7 @@ class BMI160FFTComponent : public PollingComponent {
   uint16_t fft_size_{1024};
   uint16_t sample_rate_{1600};
   uint8_t accel_range_{4};
+  size_t num_peaks_{0};
 
   // Components
   BMI160Driver driver_;
@@ -87,6 +97,10 @@ class BMI160FFTComponent : public PollingComponent {
   sensor::Sensor *total_energy_sensor_{nullptr};
   sensor::Sensor *dominant_frequency_energy_sensor_{nullptr};
   sensor::Sensor *rpm_sensor_{nullptr};
+
+  // Peak sensors (N peaks feature)
+  sensor::Sensor *peak_frequency_sensors_[MAX_PEAKS]{};
+  sensor::Sensor *peak_magnitude_sensors_[MAX_PEAKS]{};
 
   // Binary sensors
   binary_sensor::BinarySensor *running_binary_sensor_{nullptr};

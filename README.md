@@ -56,6 +56,7 @@ bmi160_fft:
 
 sensor:
   - platform: bmi160_fft
+    bmi160_fft_id: vibration_sensor
     peak_frequency:
       name: "Vibration Peak Frequency"
     peak_magnitude:
@@ -67,10 +68,17 @@ sensor:
 
 binary_sensor:
   - platform: bmi160_fft
+    bmi160_fft_id: vibration_sensor
     running:
       name: "Appliance Running"
-      energy_threshold: 0.05
-      timeout: 60s
+
+number:
+  - platform: bmi160_fft
+    bmi160_fft_id: vibration_sensor
+    energy_threshold:
+      name: "Energy Threshold"
+    running_timeout:
+      name: "Running Timeout"
 ```
 
 ### Configuration Variables
@@ -90,19 +98,48 @@ binary_sensor:
 
 | Sensor | Unit | Description |
 |--------|------|-------------|
-| `peak_frequency` | Hz | Dominant vibration frequency |
+| `peak_frequency` | Hz | Dominant vibration frequency (bounded by frequency_min/max) |
 | `peak_magnitude` | g | Magnitude of the peak frequency component |
 | `total_energy` | g | RMS energy across all frequency bins |
 | `dominant_frequency_energy` | g | Energy concentrated around the peak frequency |
 | `rpm` | RPM | Peak frequency converted to rotations per minute |
+| `peaks` | - | Multiple peak detection for spectral analysis (see below) |
+
+##### Multi-Peak Detection (`peaks`)
+
+The `peaks` option enables detection of multiple frequency peaks across the full spectrum, useful for generating heat maps or analyzing complex vibration signatures:
+
+```yaml
+sensor:
+  - platform: bmi160_fft
+    bmi160_fft_id: vibration_sensor
+    peaks:
+      count: 8           # Number of peaks to detect (0-8, 0 disables)
+      frequency_name: "Peak {} Frequency"   # Name template ({} = peak number)
+      magnitude_name: "Peak {} Magnitude"   # Name template ({} = peak number)
+```
+
+This creates `count * 2` sensors (frequency + magnitude for each peak). Peaks are:
+- Sorted by magnitude (Peak 1 = strongest)
+- Detected across the **full spectrum** (not bounded by frequency_min/max)
+- Only detected when the device is in "running" state (above energy threshold)
+
+**Use case: Heat map visualization**
+
+With 8 peaks recorded over time, you can create a scatter-plot style heat map in Grafana:
+- X-axis: time
+- Y-axis: peak frequencies
+- Color/size: magnitude
+
+This visualizes how the vibration spectrum evolves during appliance operation (e.g., washing machine spin cycles).
 
 #### `binary_sensor` Platform
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `running` | binary_sensor | - | Indicates when vibration energy exceeds threshold |
-| `energy_threshold` | float | 0.05 | Energy level (in g) that triggers the running state |
-| `timeout` | time | 60s | How long to wait after vibration stops before turning off |
+| Option | Type | Description |
+|--------|------|-------------|
+| `running` | binary_sensor | Indicates when vibration energy exceeds threshold |
+
+The `energy_threshold` and `running_timeout` are configured via the `number` platform for runtime adjustability.
 
 #### `number` Platform (Optional)
 
@@ -111,19 +148,25 @@ Expose configurable parameters as Home Assistant number entities:
 ```yaml
 number:
   - platform: bmi160_fft
+    bmi160_fft_id: vibration_sensor
     energy_threshold:
       name: "Vibration Energy Threshold"
     running_timeout:
       name: "Running Timeout"
-    frequency_threshold:
-      name: "Frequency Threshold"
+    frequency_min:
+      name: "Frequency Min"
+    frequency_max:
+      name: "Frequency Max"
 ```
 
 | Number | Range | Description |
 |--------|-------|-------------|
 | `energy_threshold` | 0.001 - 1.0 | Running detection threshold (g) |
 | `running_timeout` | 1 - 300 | Timeout in seconds |
-| `frequency_threshold` | 0 - 50 | Minimum frequency to report (Hz), filters out noise |
+| `frequency_min` | 0 - 800 | Minimum frequency for main peak detection (Hz) |
+| `frequency_max` | 0 - 800 | Maximum frequency for main peak detection (Hz) |
+
+Note: `frequency_min` and `frequency_max` only affect the main `peak_frequency`/`rpm` sensors. The multi-peak detection (`peaks`) always searches the full spectrum.
 
 ## Interrupt vs Polling Mode
 
@@ -143,15 +186,48 @@ bmi160_fft:
 
 ### Washing Machine Monitoring
 
-Detect when your washing machine is running and get notifications when the cycle completes:
+Detect when your washing machine is running and visualize the vibration spectrum:
 
 ```yaml
+bmi160_fft:
+  id: washing_machine
+  cs_pin: GPIO5
+  interrupt_pin: GPIO4
+  fft_size: 2048
+  sample_rate: 1600
+  update_interval: 2s
+
+sensor:
+  - platform: bmi160_fft
+    bmi160_fft_id: washing_machine
+    peak_frequency:
+      name: "Washing Machine Frequency"
+    rpm:
+      name: "Washing Machine RPM"
+    total_energy:
+      name: "Vibration Energy"
+    peaks:
+      count: 8
+      frequency_name: "Peak {} Frequency"
+      magnitude_name: "Peak {} Magnitude"
+
 binary_sensor:
   - platform: bmi160_fft
+    bmi160_fft_id: washing_machine
     running:
       name: "Washing Machine Running"
-      energy_threshold: 0.03
-      timeout: 120s  # 2 minutes after vibration stops
+
+number:
+  - platform: bmi160_fft
+    bmi160_fft_id: washing_machine
+    energy_threshold:
+      name: "Energy Threshold"
+    running_timeout:
+      name: "Running Timeout"
+    frequency_min:
+      name: "Frequency Min"
+    frequency_max:
+      name: "Frequency Max"
 ```
 
 ### Motor RPM Monitoring
@@ -159,8 +235,14 @@ binary_sensor:
 Monitor the speed of rotating machinery:
 
 ```yaml
+bmi160_fft:
+  id: motor_sensor
+  cs_pin: GPIO5
+  update_interval: 1s
+
 sensor:
   - platform: bmi160_fft
+    bmi160_fft_id: motor_sensor
     peak_frequency:
       name: "Motor Frequency"
     rpm:
@@ -168,6 +250,14 @@ sensor:
       filters:
         - sliding_window_moving_average:
             window_size: 5
+
+number:
+  - platform: bmi160_fft
+    bmi160_fft_id: motor_sensor
+    frequency_min:
+      name: "Min Frequency"
+    frequency_max:
+      name: "Max Frequency"
 ```
 
 ## Frequency Resolution

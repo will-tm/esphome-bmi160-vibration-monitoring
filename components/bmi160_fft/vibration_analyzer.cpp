@@ -51,9 +51,14 @@ AnalysisResult VibrationAnalyzer::analyze(const std::vector<float> &samples) {
 
   result.rpm = result.peak_frequency * 60.0f;
 
-  ESP_LOGI(TAG, "Analysis: Peak=%.2f Hz (%.1f RPM), Mag=%.4f g, Energy=%.4f, Running=%s",
+  // Find N peaks across full spectrum (unbounded) if configured
+  if (config_.num_peaks > 0 && result.is_running) {
+    find_n_peaks(config_.num_peaks, result.peaks, result.peak_count);
+  }
+
+  ESP_LOGI(TAG, "Analysis: Peak=%.2f Hz (%.1f RPM), Mag=%.4f g, Energy=%.4f, Running=%s, Peaks=%zu",
            result.peak_frequency, result.rpm, result.peak_magnitude,
-           result.total_energy, result.is_running ? "YES" : "NO");
+           result.total_energy, result.is_running ? "YES" : "NO", result.peak_count);
 
   return result;
 }
@@ -80,6 +85,46 @@ void VibrationAnalyzer::find_peak(size_t min_bin, size_t max_bin,
       peak_magnitude = magnitudes[i];
       peak_bin = i;
     }
+  }
+}
+
+void VibrationAnalyzer::find_n_peaks(size_t n, Peak *peaks, size_t &count) {
+  const auto &magnitudes = fft_.get_magnitudes();
+  count = 0;
+
+  // Limit to MAX_PEAKS
+  n = std::min(n, MAX_PEAKS);
+
+  // Temporary storage for all local maxima
+  struct BinPeak {
+    size_t bin;
+    float magnitude;
+  };
+  std::vector<BinPeak> all_peaks;
+  all_peaks.reserve(64);
+
+  // Find local maxima across full spectrum (excluding DC at bin 0)
+  for (size_t i = 2; i < magnitudes.size() - 1; i++) {
+    if (magnitudes[i] > magnitudes[i - 1] && magnitudes[i] > magnitudes[i + 1]) {
+      all_peaks.push_back({i, magnitudes[i]});
+    }
+  }
+
+  // Sort by magnitude (descending)
+  std::sort(all_peaks.begin(), all_peaks.end(),
+            [](const BinPeak &a, const BinPeak &b) { return a.magnitude > b.magnitude; });
+
+  // Take top N
+  count = std::min(n, all_peaks.size());
+  for (size_t i = 0; i < count; i++) {
+    peaks[i].frequency = all_peaks[i].bin * freq_resolution_;
+    peaks[i].magnitude = all_peaks[i].magnitude;
+  }
+
+  // Zero out unused slots
+  for (size_t i = count; i < MAX_PEAKS; i++) {
+    peaks[i].frequency = 0.0f;
+    peaks[i].magnitude = 0.0f;
   }
 }
 

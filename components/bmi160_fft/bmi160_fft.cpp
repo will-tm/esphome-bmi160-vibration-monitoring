@@ -30,6 +30,12 @@ void BMI160FFTComponent::setup() {
   // Create analyzer with actual sample rate
   analyzer_ = std::make_unique<VibrationAnalyzer>(fft_size_, sample_rate_);
 
+  // Apply num_peaks config
+  if (num_peaks_ > 0) {
+    analyzer_->get_config().num_peaks = num_peaks_;
+    ESP_LOGI(TAG, "Peak detection enabled: %zu peaks", num_peaks_);
+  }
+
   // Reserve sample buffer
   samples_.reserve(fft_size_);
 
@@ -167,6 +173,16 @@ void BMI160FFTComponent::publish_results(const AnalysisResult &result) {
   if (total_energy_sensor_) total_energy_sensor_->publish_state(result.total_energy);
   if (dominant_frequency_energy_sensor_) dominant_frequency_energy_sensor_->publish_state(result.dominant_energy);
   if (rpm_sensor_) rpm_sensor_->publish_state(result.rpm);
+
+  // Publish N peaks
+  for (size_t i = 0; i < MAX_PEAKS; i++) {
+    if (peak_frequency_sensors_[i]) {
+      peak_frequency_sensors_[i]->publish_state(result.peaks[i].frequency);
+    }
+    if (peak_magnitude_sensors_[i]) {
+      peak_magnitude_sensors_[i]->publish_state(result.peaks[i].magnitude);
+    }
+  }
 }
 
 void BMI160FFTComponent::update_running_state(bool is_running) {
@@ -225,6 +241,16 @@ void BMI160FFTComponent::dump_config() {
   LOG_SENSOR("  ", "Dominant Energy", dominant_frequency_energy_sensor_);
   LOG_SENSOR("  ", "RPM", rpm_sensor_);
   LOG_BINARY_SENSOR("  ", "Running", running_binary_sensor_);
+
+  // Log peak sensors
+  for (size_t i = 0; i < MAX_PEAKS; i++) {
+    if (peak_frequency_sensors_[i]) {
+      ESP_LOGCONFIG(TAG, "  Peak %zu Frequency: %s", i + 1, peak_frequency_sensors_[i]->get_name().c_str());
+    }
+    if (peak_magnitude_sensors_[i]) {
+      ESP_LOGCONFIG(TAG, "  Peak %zu Magnitude: %s", i + 1, peak_magnitude_sensors_[i]->get_name().c_str());
+    }
+  }
 }
 
 }  // namespace bmi160_fft
