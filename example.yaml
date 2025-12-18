@@ -1,0 +1,104 @@
+# Example ESPHome configuration for BMI160 Vibration Monitoring
+#
+# This example shows a complete setup for monitoring a washing machine
+# using an ESP32 and BMI160 accelerometer.
+
+esphome:
+  name: washing-machine-sensor
+  friendly_name: Washing Machine Sensor
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: INFO
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "Washing-Machine-Sensor"
+    password: !secret ap_password
+
+captive_portal:
+
+# Load the BMI160 FFT component from GitHub
+external_components:
+  - source: github://will-tm/esphome-bmi160-vibration-monitoring
+    components: [bmi160_fft]
+
+# SPI bus configuration for BMI160
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+# BMI160 FFT sensor configuration
+bmi160_fft:
+  id: vibration_sensor
+  cs_pin: GPIO5
+  interrupt_pin: GPIO4    # Optional: enables interrupt mode for efficient sampling
+  fft_size: 1024          # FFT window size (higher = better frequency resolution)
+  sample_rate: 1600       # Accelerometer sample rate in Hz
+  accel_range: 4          # Accelerometer range in g (+/- 4g)
+  update_interval: 5s     # How often to run FFT analysis
+
+# Vibration sensors
+sensor:
+  - platform: bmi160_fft
+    peak_frequency:
+      name: "Peak Frequency"
+      id: peak_freq
+    peak_magnitude:
+      name: "Peak Magnitude"
+    total_energy:
+      name: "Total Energy"
+      id: total_energy
+    dominant_frequency_energy:
+      name: "Dominant Frequency Energy"
+    rpm:
+      name: "Motor RPM"
+
+  # WiFi signal strength for diagnostics
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+
+# Binary sensor for running state detection
+binary_sensor:
+  - platform: bmi160_fft
+    running:
+      name: "Running"
+      id: is_running
+      device_class: running
+      energy_threshold: 0.05   # Trigger when energy exceeds this value (in g)
+      timeout: 60s             # Turn off 60 seconds after vibration stops
+
+# Adjustable parameters via Home Assistant
+number:
+  - platform: bmi160_fft
+    energy_threshold:
+      name: "Energy Threshold"
+    running_timeout:
+      name: "Running Timeout"
+    frequency_threshold:
+      name: "Frequency Threshold"
+
+# Status LED (optional)
+status_led:
+  pin:
+    number: GPIO2
+    inverted: false
