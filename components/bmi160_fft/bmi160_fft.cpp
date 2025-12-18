@@ -1,5 +1,8 @@
 #include "bmi160_fft.h"
 #include "esphome/core/log.h"
+#ifdef USE_MQTT
+#include "esphome/components/mqtt/mqtt_client.h"
+#endif
 #include <cmath>
 
 namespace esphome {
@@ -174,7 +177,7 @@ void BMI160FFTComponent::publish_results(const AnalysisResult &result) {
   if (dominant_frequency_energy_sensor_) dominant_frequency_energy_sensor_->publish_state(result.dominant_energy);
   if (rpm_sensor_) rpm_sensor_->publish_state(result.rpm);
 
-  // Publish N peaks
+  // Publish N peaks via native API sensors
   for (size_t i = 0; i < MAX_PEAKS; i++) {
     if (peak_frequency_sensors_[i]) {
       peak_frequency_sensors_[i]->publish_state(result.peaks[i].frequency);
@@ -183,6 +186,41 @@ void BMI160FFTComponent::publish_results(const AnalysisResult &result) {
       peak_magnitude_sensors_[i]->publish_state(result.peaks[i].magnitude);
     }
   }
+
+  // Publish raw data via MQTT (for debugging, only if MQTT is configured)
+#ifdef USE_MQTT
+  if (mqtt::global_mqtt_client != nullptr) {
+    const std::string &prefix = mqtt::global_mqtt_client->get_topic_prefix();
+    char buf[16];
+
+    // Raw samples
+    std::string json;
+    json.reserve(samples_.size() * 8 + 2);
+    json = "[";
+    for (size_t i = 0; i < samples_.size(); i++) {
+      if (i > 0) json += ",";
+      snprintf(buf, sizeof(buf), "%.4f", samples_[i]);
+      json += buf;
+    }
+    json += "]";
+    mqtt::global_mqtt_client->publish(prefix + "/raw_samples", json);
+
+    // FFT magnitudes
+    if (analyzer_) {
+      const auto &mags = analyzer_->get_fft_magnitudes();
+      json.clear();
+      json.reserve(mags.size() * 10 + 2);
+      json = "[";
+      for (size_t i = 0; i < mags.size(); i++) {
+        if (i > 0) json += ",";
+        snprintf(buf, sizeof(buf), "%.6f", mags[i]);
+        json += buf;
+      }
+      json += "]";
+      mqtt::global_mqtt_client->publish(prefix + "/fft_magnitudes", json);
+    }
+  }
+#endif
 }
 
 void BMI160FFTComponent::update_running_state(bool is_running) {

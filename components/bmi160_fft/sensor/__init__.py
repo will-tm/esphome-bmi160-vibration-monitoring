@@ -3,12 +3,12 @@ import esphome.config_validation as cv
 from esphome.components import sensor
 from esphome.const import (
     CONF_ID,
-    CONF_NAME,
     CONF_COUNT,
     UNIT_HERTZ,
     DEVICE_CLASS_FREQUENCY,
     STATE_CLASS_MEASUREMENT,
 )
+from esphome.core import CORE
 from .. import bmi160_fft_ns, BMI160FFTComponent, CONF_BMI160_FFT_ID
 
 DEPENDENCIES = ['bmi160_fft']
@@ -95,41 +95,53 @@ async def to_code(config):
         sens = await sensor.new_sensor(config[CONF_RPM])
         cg.add(parent.set_rpm_sensor(sens))
 
+    # Process peaks - only when MQTT is NOT configured (they conflict)
     if CONF_PEAKS in config:
+        # Check if MQTT is enabled
+        mqtt_enabled = "mqtt" in CORE.config
+
         peaks_config = config[CONF_PEAKS]
         count = peaks_config[CONF_COUNT]
         freq_name_template = peaks_config[CONF_FREQUENCY_NAME]
         mag_name_template = peaks_config[CONF_MAGNITUDE_NAME]
 
         if count > 0:
-            cg.add(parent.set_num_peaks(count))
+            if mqtt_enabled:
+                # Skip peaks when MQTT is enabled - they conflict
+                import esphome.core as core
+                core._LOGGER.warning(
+                    "Peak sensors are disabled when MQTT is enabled. "
+                    "Remove mqtt: from config to enable peak sensors."
+                )
+            else:
+                cg.add(parent.set_num_peaks(count))
 
-            for i in range(count):
-                # Create frequency sensor with unique ID
-                freq_id = cv.declare_id(sensor.Sensor)(f"peak_{i+1}_freq")
-                freq_config = sensor.sensor_schema(
-                    unit_of_measurement=UNIT_HERTZ,
-                    accuracy_decimals=2,
-                    device_class=DEVICE_CLASS_FREQUENCY,
-                    state_class=STATE_CLASS_MEASUREMENT,
-                    icon="mdi:sine-wave",
-                )({
-                    CONF_ID: freq_id,
-                    CONF_NAME: freq_name_template.format(i + 1),
-                })
-                freq_sens = await sensor.new_sensor(freq_config)
-                cg.add(parent.set_peak_frequency_sensor(i, freq_sens))
+                for i in range(count):
+                    # Build frequency sensor config through schema with unique ID
+                    freq_schema = sensor.sensor_schema(
+                        unit_of_measurement=UNIT_HERTZ,
+                        accuracy_decimals=2,
+                        device_class=DEVICE_CLASS_FREQUENCY,
+                        state_class=STATE_CLASS_MEASUREMENT,
+                        icon="mdi:sine-wave",
+                    )
+                    freq_config = freq_schema({
+                        CONF_ID: f"bmi160_peak_{i+1}_frequency",
+                        "name": freq_name_template.format(i + 1),
+                    })
+                    freq_sens = await sensor.new_sensor(freq_config)
+                    cg.add(parent.set_peak_frequency_sensor(i, freq_sens))
 
-                # Create magnitude sensor with unique ID
-                mag_id = cv.declare_id(sensor.Sensor)(f"peak_{i+1}_mag")
-                mag_config = sensor.sensor_schema(
-                    unit_of_measurement=UNIT_G,
-                    accuracy_decimals=4,
-                    state_class=STATE_CLASS_MEASUREMENT,
-                    icon=ICON_VIBRATE,
-                )({
-                    CONF_ID: mag_id,
-                    CONF_NAME: mag_name_template.format(i + 1),
-                })
-                mag_sens = await sensor.new_sensor(mag_config)
-                cg.add(parent.set_peak_magnitude_sensor(i, mag_sens))
+                    # Build magnitude sensor config through schema with unique ID
+                    mag_schema = sensor.sensor_schema(
+                        unit_of_measurement=UNIT_G,
+                        accuracy_decimals=4,
+                        state_class=STATE_CLASS_MEASUREMENT,
+                        icon=ICON_VIBRATE,
+                    )
+                    mag_config = mag_schema({
+                        CONF_ID: f"bmi160_peak_{i+1}_magnitude",
+                        "name": mag_name_template.format(i + 1),
+                    })
+                    mag_sens = await sensor.new_sensor(mag_config)
+                    cg.add(parent.set_peak_magnitude_sensor(i, mag_sens))

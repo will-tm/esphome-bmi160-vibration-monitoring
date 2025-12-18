@@ -51,6 +51,9 @@ class VibrationAnalyzer {
   uint16_t get_sample_rate() const { return sample_rate_; }
   float get_frequency_resolution() const { return freq_resolution_; }
 
+  // Access to FFT magnitudes (for raw data output)
+  const std::vector<float> &get_fft_magnitudes() const { return fft_.get_magnitudes(); }
+
  private:
   float compute_total_energy();
   void find_peak(size_t min_bin, size_t max_bin, size_t &peak_bin, float &peak_magnitude);
