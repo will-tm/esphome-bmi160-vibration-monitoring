@@ -7,7 +7,7 @@ from esphome.const import (
     DEVICE_CLASS_FREQUENCY,
     STATE_CLASS_MEASUREMENT,
 )
-from .. import bmi160_fft_ns, BMI160FFT, CONF_BMI160_FFT_ID
+from .. import bmi160_fft_ns, BMI160FFTComponent, CONF_BMI160_FFT_ID
 
 DEPENDENCIES = ['bmi160_fft']
 
@@ -23,7 +23,7 @@ ICON_VIBRATE = 'mdi:vibrate'
 ICON_RPM = 'mdi:rotate-3d-variant'
 
 CONFIG_SCHEMA = cv.Schema({
-    cv.GenerateID(CONF_BMI160_FFT_ID): cv.use_id(BMI160FFT),
+    cv.GenerateID(CONF_BMI160_FFT_ID): cv.use_id(BMI160FFTComponent),
     cv.Optional(CONF_PEAK_FREQUENCY): sensor.sensor_schema(
         unit_of_measurement=UNIT_HERTZ,
         accuracy_decimals=2,

@@ -1,0 +1,12 @@
+{
+    "name": "bmi160_fft",
+    "version": "1.0.0",
+    "description": "BMI160 accelerometer FFT vibration analysis for ESPHome",
+    "frameworks": ["espidf", "arduino"],
+    "platforms": ["espressif32", "espressif8266"],
+    "build": {
+        "srcFilter": ["+<*.cpp>"],
+        "includeDir": ".",
+        "srcDir": "."
+    }
+}

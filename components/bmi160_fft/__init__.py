@@ -3,10 +3,12 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID
 from esphome.components import spi
 from esphome import pins
-from .types import bmi160_fft_ns, BMI160FFT
+import os
+from .types import bmi160_fft_ns, BMI160FFTComponent, BMI160Driver
 
 DEPENDENCIES = ['spi']
 AUTO_LOAD = ['sensor', 'binary_sensor', 'number']
+CODEOWNERS = ['@custom']
 
 CONF_BMI160_FFT_ID = 'bmi160_fft_id'
 CONF_FFT_SIZE = 'fft_size'
@@ -15,7 +17,7 @@ CONF_ACCEL_RANGE = 'accel_range'
 CONF_INTERRUPT_PIN = 'interrupt_pin'
 
 CONFIG_SCHEMA = cv.Schema({
-    cv.GenerateID(): cv.declare_id(BMI160FFT),
+    cv.GenerateID(): cv.declare_id(BMI160FFTComponent),
     cv.Optional(CONF_FFT_SIZE, default=1024): cv.one_of(128, 256, 512, 1024, 2048, 4096, int=True),
     cv.Optional(CONF_SAMPLE_RATE, default=1600): cv.one_of(100, 200, 400, 800, 1600, int=True),
     cv.Optional(CONF_ACCEL_RANGE, default=4): cv.one_of(2, 4, 8, 16, int=True),
@@ -24,9 +26,17 @@ CONFIG_SCHEMA = cv.Schema({
 
 
 async def to_code(config):
+    # Add parent directory to lib_extra_dirs so PlatformIO finds and compiles this as a library
+    component_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(component_dir)
+    cg.add_platformio_option("lib_extra_dirs", [parent_dir])
+
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
-    await spi.register_spi_device(var, config)
+
+    # Register SPI on the internal driver
+    driver = cg.MockObj(f'{var}->get_driver()', '.')
+    await spi.register_spi_device(driver, config)
 
     cg.add(var.set_fft_size(config[CONF_FFT_SIZE]))
     cg.add(var.set_sample_rate(config[CONF_SAMPLE_RATE]))
