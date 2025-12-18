@@ -3,10 +3,14 @@
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/preferences.h"
+#include "esphome/core/application.h"
 #include "esphome/components/spi/spi.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/number/number.h"
+#ifdef USE_API
+#include "esphome/components/api/api_server.h"
+#endif
 #include <vector>
 
 namespace esphome {
@@ -54,12 +58,15 @@ class BMI160FFTNumber : public number::Number, public Component {
   void set_parent(BMI160FFT *parent) { this->parent_ = parent; }
   void set_type(uint8_t type) { this->type_ = type; }
   void setup() override;
+  void loop() override;
+  float get_setup_priority() const override { return setup_priority::DATA - 1.0f; }  // After parent
 
  protected:
   void control(float value) override;
   BMI160FFT *parent_{nullptr};
-  uint8_t type_{0};  // 0=energy_threshold, 1=timeout, 2=frequency_threshold
+  uint8_t type_{0};  // 0=energy_threshold, 1=timeout, 2=frequency_min, 3=frequency_max
   ESPPreferenceObject pref_;
+  bool api_state_published_{false};
 };
 
 class BMI160FFT : public PollingComponent,
@@ -89,13 +96,16 @@ class BMI160FFT : public PollingComponent,
 
   void set_energy_threshold_number(BMI160FFTNumber *number) { this->energy_threshold_number_ = number; }
   void set_timeout_number(BMI160FFTNumber *number) { this->timeout_number_ = number; }
-  void set_frequency_threshold_number(BMI160FFTNumber *number) { this->frequency_threshold_number_ = number; }
+  void set_frequency_min_number(BMI160FFTNumber *number) { this->frequency_min_number_ = number; }
+  void set_frequency_max_number(BMI160FFTNumber *number) { this->frequency_max_number_ = number; }
 
   // Getters/setters for number controls
   float get_running_threshold() const { return this->running_threshold_; }
   uint32_t get_running_timeout_ms() const { return this->running_timeout_ms_; }
-  float get_frequency_threshold() const { return this->frequency_threshold_; }
-  void set_frequency_threshold(float threshold) { this->frequency_threshold_ = threshold; }
+  float get_frequency_min() const { return this->frequency_min_; }
+  void set_frequency_min(float freq) { this->frequency_min_ = freq; }
+  float get_frequency_max() const { return this->frequency_max_; }
+  void set_frequency_max(float freq) { this->frequency_max_ = freq; }
 
  protected:
   uint8_t read_register_(uint8_t reg);
@@ -104,7 +114,6 @@ class BMI160FFT : public PollingComponent,
   bool init_bmi160_();
   void configure_fifo_and_interrupt_();
   bool collect_samples_polling_();
-  bool collect_samples_interrupt_();
   uint16_t read_fifo_(float *buffer, uint16_t max_samples);
   void perform_fft_();
 
@@ -145,8 +154,10 @@ class BMI160FFT : public PollingComponent,
   // Number controls
   BMI160FFTNumber *energy_threshold_number_{nullptr};
   BMI160FFTNumber *timeout_number_{nullptr};
-  BMI160FFTNumber *frequency_threshold_number_{nullptr};
-  float frequency_threshold_{1.0f};
+  BMI160FFTNumber *frequency_min_number_{nullptr};
+  BMI160FFTNumber *frequency_max_number_{nullptr};
+  float frequency_min_{1.0f};
+  float frequency_max_{800.0f};  // Default to Nyquist/2 for 1600Hz sample rate
 
   bool initialized_{false};
 };

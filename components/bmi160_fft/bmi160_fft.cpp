@@ -192,17 +192,41 @@ bool BMI160FFT::init_bmi160_() {
   this->write_register_(BMI160_REG_CMD, BMI160_CMD_ACC_SET_PMU_MODE_NORMAL);
   delay(4);
 
-  // Configure accelerometer ODR
+  // Configure accelerometer ODR - clamp to valid values
   uint8_t odr_config;
-  switch (this->sample_rate_) {
-    case 100:  odr_config = 0x08; break;
-    case 200:  odr_config = 0x09; break;
-    case 400:  odr_config = 0x0A; break;
-    case 800:  odr_config = 0x0B; break;
-    case 1600: odr_config = 0x0C; break;
-    default:   odr_config = 0x0C; break;
+  uint16_t actual_sample_rate;
+  if (this->sample_rate_ <= 100) {
+    odr_config = 0x08; actual_sample_rate = 100;
+  } else if (this->sample_rate_ <= 200) {
+    odr_config = 0x09; actual_sample_rate = 200;
+  } else if (this->sample_rate_ <= 400) {
+    odr_config = 0x0A; actual_sample_rate = 400;
+  } else if (this->sample_rate_ <= 800) {
+    odr_config = 0x0B; actual_sample_rate = 800;
+  } else {
+    odr_config = 0x0C; actual_sample_rate = 1600;
   }
-  this->write_register_(BMI160_REG_ACC_CONF, (0x02 << 4) | odr_config);
+
+  // Update sample_rate_ to match actual ODR (critical for correct frequency calculation!)
+  if (this->sample_rate_ != actual_sample_rate) {
+    ESP_LOGW(TAG, "Requested sample rate %d Hz not supported, using %d Hz",
+             this->sample_rate_, actual_sample_rate);
+    this->sample_rate_ = actual_sample_rate;
+  }
+
+  uint8_t acc_conf_value = (0x02 << 4) | odr_config;
+  this->write_register_(BMI160_REG_ACC_CONF, acc_conf_value);
+
+  // Verify ACC_CONF was written correctly
+  delay(1);
+  uint8_t acc_conf_readback = this->read_register_(BMI160_REG_ACC_CONF);
+  if (acc_conf_readback != acc_conf_value) {
+    ESP_LOGE(TAG, "ACC_CONF write failed! Wrote 0x%02X, read back 0x%02X",
+             acc_conf_value, acc_conf_readback);
+    ESP_LOGE(TAG, "Frequency calculations will be INCORRECT!");
+  } else {
+    ESP_LOGI(TAG, "ACC_CONF set to 0x%02X (ODR=%d Hz)", acc_conf_value, actual_sample_rate);
+  }
 
   // Configure accelerometer range
   uint8_t range_config;
@@ -458,10 +482,9 @@ void BMI160FFT::perform_fft_() {
   FFT::compute(this->fft_real_.data(), this->fft_imag_.data(), this->fft_size_);
 
   float freq_resolution = (float)this->sample_rate_ / (float)this->fft_size_;
-  float peak_magnitude = 0.0f;
-  size_t peak_bin = 1;
-  float total_energy = 0.0f;
 
+  // First pass: compute all magnitudes and total energy
+  float total_energy = 0.0f;
   for (size_t i = 1; i < this->fft_size_ / 2; i++) {
     float real = this->fft_real_[i];
     float imag = this->fft_imag_[i];
@@ -470,33 +493,55 @@ void BMI160FFT::perform_fft_() {
 
     this->fft_output_[i] = magnitude;
     total_energy += magnitude * magnitude;
-
-    if (magnitude > peak_magnitude) {
-      peak_magnitude = magnitude;
-      peak_bin = i;
-    }
-  }
-
-  float peak_frequency = peak_bin * freq_resolution;
-  // Clamp to 0 if below frequency threshold (noise floor)
-  if (peak_frequency < this->frequency_threshold_) {
-    peak_frequency = 0.0f;
   }
   total_energy = std::sqrt(total_energy);
 
+  // Only search for peak frequency if total energy is above threshold
+  float peak_magnitude = 0.0f;
+  float peak_frequency = 0.0f;
   float dominant_energy = 0.0f;
-  int band_size = 0;
-  for (int i = std::max(1, (int)peak_bin - 2); i <= std::min((int)(this->fft_size_ / 2 - 1), (int)peak_bin + 2); i++) {
-    dominant_energy += this->fft_output_[i] * this->fft_output_[i];
-    band_size++;
+  size_t peak_bin = 0;
+
+  if (total_energy >= this->running_threshold_) {
+    // Calculate bin range from frequency limits
+    size_t min_bin = std::max((size_t)1, (size_t)std::ceil(this->frequency_min_ / freq_resolution));
+    size_t max_bin = std::min((size_t)(this->fft_size_ / 2 - 1), (size_t)std::floor(this->frequency_max_ / freq_resolution));
+
+    ESP_LOGD(TAG, "FFT: sample_rate=%d Hz, fft_size=%d, freq_resolution=%.3f Hz/bin",
+             this->sample_rate_, this->fft_size_, freq_resolution);
+    ESP_LOGD(TAG, "FFT: searching bins %zu--%zu (%.1f--%.1f Hz)",
+             min_bin, max_bin, min_bin * freq_resolution, max_bin * freq_resolution);
+
+    // Find peak only within frequency range [min, max]
+    for (size_t i = min_bin; i <= max_bin; i++) {
+      if (this->fft_output_[i] > peak_magnitude) {
+        peak_magnitude = this->fft_output_[i];
+        peak_bin = i;
+      }
+    }
+
+    // Calculate peak frequency (0 if no peak found)
+    if (peak_bin > 0) {
+      peak_frequency = peak_bin * freq_resolution;
+
+      // Calculate dominant energy around peak (RMS of ±2 bins)
+      int band_size = 0;
+      for (int i = std::max(1, (int)peak_bin - 2); i <= std::min((int)(this->fft_size_ / 2 - 1), (int)peak_bin + 2); i++) {
+        dominant_energy += this->fft_output_[i] * this->fft_output_[i];
+        band_size++;
+      }
+      dominant_energy = std::sqrt(dominant_energy / band_size);
+    }
+  } else {
+    ESP_LOGD(TAG, "FFT: total_energy %.4f below threshold %.4f, skipping peak detection",
+             total_energy, this->running_threshold_);
   }
-  dominant_energy = std::sqrt(dominant_energy / band_size);
 
   // Calculate RPM from peak frequency (1 Hz = 60 RPM)
   float rpm = peak_frequency * 60.0f;
 
-  ESP_LOGI(TAG, "FFT: Peak=%.2f Hz (%.1f RPM), Mag=%.4f g, Energy=%.4f",
-           peak_frequency, rpm, peak_magnitude, total_energy);
+  ESP_LOGI(TAG, "FFT: Peak=%.2f Hz (bin %zu, %.1f RPM), Mag=%.4f g, Energy=%.4f",
+           peak_frequency, peak_bin, rpm, peak_magnitude, total_energy);
 
   if (this->peak_frequency_sensor_ != nullptr)
     this->peak_frequency_sensor_->publish_state(peak_frequency);
@@ -567,57 +612,85 @@ void BMI160FFT::dump_config() {
 // Fixed preference keys for stable storage across OTA
 static const uint32_t PREF_ENERGY_THRESHOLD = 0xBF160E01;
 static const uint32_t PREF_TIMEOUT = 0xBF160E02;
-static const uint32_t PREF_FREQ_THRESHOLD = 0xBF160E03;
+static const uint32_t PREF_FREQ_MIN = 0xBF160E03;
+static const uint32_t PREF_FREQ_MAX = 0xBF160E04;
 
 void BMI160FFTNumber::setup() {
   float value;
-  float restored;
 
   // Use fixed preference key based on type (stable across OTA)
   uint32_t pref_key;
+  const char *name;
   switch (this->type_) {
-    case 0: pref_key = PREF_ENERGY_THRESHOLD; break;
-    case 1: pref_key = PREF_TIMEOUT; break;
-    default: pref_key = PREF_FREQ_THRESHOLD; break;
+    case 0:
+      pref_key = PREF_ENERGY_THRESHOLD;
+      name = "energy_threshold";
+      break;
+    case 1:
+      pref_key = PREF_TIMEOUT;
+      name = "timeout";
+      break;
+    case 2:
+      pref_key = PREF_FREQ_MIN;
+      name = "frequency_min";
+      break;
+    default:
+      pref_key = PREF_FREQ_MAX;
+      name = "frequency_max";
+      break;
   }
   this->pref_ = global_preferences->make_preference<float>(pref_key);
 
-  if (this->pref_.load(&restored)) {
-    // Restored from flash
-    value = restored;
-    const char *name = this->type_ == 0 ? "energy_threshold" :
-                       this->type_ == 1 ? "timeout" : "frequency_threshold";
+  // Try to restore from flash, otherwise use current parent value as default
+  if (this->pref_.load(&value)) {
     ESP_LOGI("bmi160_fft", "Restored %s from flash: %.4f", name, value);
-    // Apply restored value
-    if (this->type_ == 0) {
-      this->parent_->set_running_threshold(value);
-    } else if (this->type_ == 1) {
-      this->parent_->set_running_timeout(value);
-    } else {
-      this->parent_->set_frequency_threshold(value);
-    }
   } else {
-    // Use default from parent
+    // Get default from parent (set during construction from YAML or hardcoded defaults)
     if (this->type_ == 0) {
       value = this->parent_->get_running_threshold();
     } else if (this->type_ == 1) {
       value = this->parent_->get_running_timeout_ms() / 1000.0f;
+    } else if (this->type_ == 2) {
+      value = this->parent_->get_frequency_min();
     } else {
-      value = this->parent_->get_frequency_threshold();
+      value = this->parent_->get_frequency_max();
     }
-    ESP_LOGI("bmi160_fft", "No saved value for %s, using default: %.4f",
-             this->type_ == 0 ? "energy_threshold" :
-             this->type_ == 1 ? "timeout" : "frequency_threshold", value);
+    ESP_LOGI("bmi160_fft", "No saved value for %s, using default: %.4f", name, value);
+    // Save the default so it persists
+    this->pref_.save(&value);
   }
 
-  // Store value and publish immediately and after a delay (for HA connection)
-  this->state = value;
-  this->publish_state(value);
+  // Apply to parent (ensures parent has correct value regardless of initialization order)
+  if (this->type_ == 0) {
+    this->parent_->set_running_threshold(value);
+  } else if (this->type_ == 1) {
+    this->parent_->set_running_timeout(value);
+  } else if (this->type_ == 2) {
+    this->parent_->set_frequency_min(value);
+  } else {
+    this->parent_->set_frequency_max(value);
+  }
 
-  // Schedule another publish after API connects
-  this->set_timeout(5000, [this, value]() {
-    this->publish_state(value);
-  });
+  // Publish state - this makes the value available to HA when it connects
+  this->publish_state(value);
+}
+
+void BMI160FFTNumber::loop() {
+  // Once API is connected, republish state to ensure HA receives it
+  if (!this->api_state_published_) {
+#ifdef USE_API
+    if (api::global_api_server != nullptr && api::global_api_server->is_connected()) {
+      this->publish_state(this->state);
+      this->api_state_published_ = true;
+      const char *name = this->type_ == 0 ? "energy_threshold" :
+                         this->type_ == 1 ? "timeout" :
+                         this->type_ == 2 ? "frequency_min" : "frequency_max";
+      ESP_LOGD("bmi160_fft", "Published %s to HA: %.4f", name, this->state);
+    }
+#else
+    this->api_state_published_ = true;  // No API, skip
+#endif
+  }
 }
 
 void BMI160FFTNumber::control(float value) {
@@ -629,10 +702,14 @@ void BMI160FFTNumber::control(float value) {
     // Timeout (in seconds)
     this->parent_->set_running_timeout(value);
     ESP_LOGI("bmi160_fft", "Running timeout set to %.0f seconds", value);
+  } else if (this->type_ == 2) {
+    // Frequency min
+    this->parent_->set_frequency_min(value);
+    ESP_LOGI("bmi160_fft", "Frequency min set to %.2f Hz", value);
   } else {
-    // Frequency threshold
-    this->parent_->set_frequency_threshold(value);
-    ESP_LOGI("bmi160_fft", "Frequency threshold set to %.2f Hz", value);
+    // Frequency max
+    this->parent_->set_frequency_max(value);
+    ESP_LOGI("bmi160_fft", "Frequency max set to %.2f Hz", value);
   }
   this->publish_state(value);
 
